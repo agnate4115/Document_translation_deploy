@@ -6,7 +6,9 @@ Preserves all PDF formatting including fonts, sizes, colors, styles, images, tab
 import os
 import base64
 from pathlib import Path
+import uuid
 import streamlit as st
+from streamlit import components
 from dotenv import load_dotenv
 import logging
 
@@ -51,7 +53,7 @@ if "auth_ok" not in st.session_state:
 
 # Page configuration
 st.set_page_config(
-    page_title="PDF Translator - Azure OpenAI",
+    page_title="PDF Translator ",
     page_icon="📄",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -93,7 +95,7 @@ if not st.session_state.auth_ok:
     st.sidebar.warning("Translation is locked. Enter the password to unlock.")
 
 # Azure OpenAI info (no key/URI values shown)
-st.sidebar.subheader("Azure OpenAI")
+st.sidebar.subheader("Azure ")
 st.sidebar.markdown(
     "- **Credentials source**: `.env`\n"
     "- **UI note**: Secrets/URLs are never shown here",
@@ -172,19 +174,45 @@ def render_pdf(title: str, pdf_bytes: bytes):
     if not pdf_bytes:
         return
     b64 = base64.b64encode(pdf_bytes).decode("utf-8")
+    container_id = f"pdf-container-{uuid.uuid4().hex}"
     pdf_display = f"""
     <div style="border: 1px solid rgba(49, 51, 63, 0.2); border-radius: 10px; overflow: hidden;">
       <div style="padding: 10px 12px; background: rgba(49, 51, 63, 0.06); font-weight: 600;">{title}</div>
-      <iframe
-        src="data:application/pdf;base64,{b64}"
-        width="100%"
-        height="820px"
-        type="application/pdf"
-        style="border: 0;"
-      ></iframe>
+      <div id="{container_id}" style="width: 100%; height: 820px;"></div>
+      <script type="text/javascript">
+        (function() {{
+          const b64Data = "{b64}";
+          try {{
+            const byteCharacters = atob(b64Data);
+            const byteNumbers = new Array(byteCharacters.length);
+            for (let i = 0; i < byteCharacters.length; i++) {{
+              byteNumbers[i] = byteCharacters.charCodeAt(i);
+            }}
+            const byteArray = new Uint8Array(byteNumbers);
+            const blob = new Blob([byteArray], {{ type: "application/pdf" }});
+            const url = URL.createObjectURL(blob);
+            const iframe = document.createElement('iframe');
+            iframe.src = url;
+            iframe.width = "100%";
+            iframe.height = "100%";
+            iframe.style.border = "0";
+            const container = document.getElementById("{container_id}");
+            if (container) {{
+              container.innerHTML = "";
+              container.appendChild(iframe);
+            }}
+          }} catch (e) {{
+            console.error("Failed to render PDF iframe", e);
+            const container = document.getElementById("{container_id}");
+            if (container) {{
+              container.innerHTML = "<div style='padding: 12px; color: #e63946;'>Unable to preview PDF inline. Please use the download button below to open it in a new tab.</div>";
+            }}
+          }}
+        }})();
+      </script>
     </div>
     """
-    st.markdown(pdf_display, unsafe_allow_html=True)
+    components.v1.html(pdf_display, height=860, scrolling=False)
 
 # Main content area
 st.title("PDF Translator")
@@ -388,7 +416,7 @@ st.markdown("---")
 st.markdown(
     """
     <div style='text-align: center; color: gray;'>
-        <p>PDF Translator powered by Azure OpenAI</p>
+        <p>PDF Translator </p>
         <p>Preserves fonts, sizes, colors, styles, images, tables, layouts, headers, footers, spacing, alignment, and positioning</p>
     </div>
     """,
