@@ -169,49 +169,108 @@ def validate_azure_credentials():
         return False, "API Version is required"
     return True, ""
 
-# Helper to render a PDF inline
+# Helper to render a PDF inline using Syncfusion PDF Viewer
 def render_pdf(title: str, pdf_bytes: bytes):
     if not pdf_bytes:
         return
+
+    # Encode PDF as base64 for Syncfusion viewer
     b64 = base64.b64encode(pdf_bytes).decode("utf-8")
     container_id = f"pdf-container-{uuid.uuid4().hex}"
+
+    # Read Syncfusion license key from environment (required for licensed usage)
+    # NOTE: Set SYNCFUSION_LICENSE_KEY in your Streamlit deployment environment.
+    syncfusion_key = os.getenv("SYNCFUSION_LICENSE_KEY", "")
+
     pdf_display = f"""
     <div style="border: 1px solid rgba(49, 51, 63, 0.2); border-radius: 10px; overflow: hidden;">
       <div style="padding: 10px 12px; background: rgba(49, 51, 63, 0.06); font-weight: 600;">{title}</div>
       <div id="{container_id}" style="width: 100%; height: 820px;"></div>
-      <script type="text/javascript">
-        (function() {{
-          const b64Data = "{b64}";
+    </div>
+    <script type="text/javascript">
+      (function() {{
+        var b64Data = "{b64}";
+        var licenseKey = "{syncfusion_key}";
+        var containerId = "{container_id}";
+
+        function initPdfViewer() {{
+          if (!window.ej || !ej.pdfviewer || !ej.pdfviewer.PdfViewer) {{
+            console.error("Syncfusion EJ2 PDF Viewer scripts not loaded.");
+            var c = document.getElementById(containerId);
+            if (c) {{
+              c.innerHTML = "<div style='padding: 12px; color: #e63946;'>Failed to load PDF viewer. Please check network access to cdn.syncfusion.com.</div>";
+            }}
+            return;
+          }}
+
           try {{
-            const byteCharacters = atob(b64Data);
-            const byteNumbers = new Array(byteCharacters.length);
-            for (let i = 0; i < byteCharacters.length; i++) {{
-              byteNumbers[i] = byteCharacters.charCodeAt(i);
+            if (licenseKey) {{
+              ej.base.registerLicense(licenseKey);
             }}
-            const byteArray = new Uint8Array(byteNumbers);
-            const blob = new Blob([byteArray], {{ type: "application/pdf" }});
-            const url = URL.createObjectURL(blob);
-            const iframe = document.createElement('iframe');
-            iframe.src = url;
-            iframe.width = "100%";
-            iframe.height = "100%";
-            iframe.style.border = "0";
-            const container = document.getElementById("{container_id}");
-            if (container) {{
-              container.innerHTML = "";
-              container.appendChild(iframe);
-            }}
+
+            ej.pdfviewer.PdfViewer.Inject(
+              ej.pdfviewer.Toolbar,
+              ej.pdfviewer.Magnification,
+              ej.pdfviewer.Navigation,
+              ej.pdfviewer.Print,
+              ej.pdfviewer.TextSelection,
+              ej.pdfviewer.TextSearch,
+              ej.pdfviewer.Annotation,
+              ej.pdfviewer.FormFields,
+              ej.pdfviewer.FormDesigner
+            );
+
+            var viewer = new ej.pdfviewer.PdfViewer({{
+              enableToolbar: true,
+              enableNavigation: true,
+              enableTextSelection: true,
+              enableAnnotation: true,
+              width: "100%",
+              height: "100%",
+              serviceUrl: "https://ej2services.syncfusion.com/production/web-services/api/pdfviewer"
+            }});
+
+            viewer.appendTo("#" + containerId);
+            viewer.load("data:application/pdf;base64," + b64Data, null);
           }} catch (e) {{
-            console.error("Failed to render PDF iframe", e);
-            const container = document.getElementById("{container_id}");
-            if (container) {{
-              container.innerHTML = "<div style='padding: 12px; color: #e63946;'>Unable to preview PDF inline. Please use the download button below to open it in a new tab.</div>";
+            console.error("Error initializing Syncfusion PDF Viewer", e);
+            var c = document.getElementById(containerId);
+            if (c) {{
+              c.innerHTML = "<div style='padding: 12px; color: #e63946;'>Unable to preview PDF inline. Please use the download button below to open it.</div>";
             }}
           }}
-        }})();
-      </script>
-    </div>
+        }}
+
+        function loadSyncfusionResources(callback) {{
+          // Load CSS
+          var link = document.createElement("link");
+          link.rel = "stylesheet";
+          link.href = "https://cdn.syncfusion.com/ej2/26.1.35/material.css";
+          document.head.appendChild(link);
+
+          // Load JS bundle
+          var script = document.createElement("script");
+          script.src = "https://cdn.syncfusion.com/ej2/26.1.35/dist/ej2.min.js";
+          script.onload = callback;
+          script.onerror = function() {{
+            console.error("Failed to load Syncfusion EJ2 script from CDN.");
+            var c = document.getElementById(containerId);
+            if (c) {{
+              c.innerHTML = "<div style='padding: 12px; color: #e63946;'>Failed to load Syncfusion viewer scripts from CDN. Please check your network.</div>";
+            }}
+          }};
+          document.head.appendChild(script);
+        }}
+
+        if (!window.ej || !ej.pdfviewer || !ej.pdfviewer.PdfViewer) {{
+          loadSyncfusionResources(initPdfViewer);
+        }} else {{
+          initPdfViewer();
+        }}
+      }})();
+    </script>
     """
+
     components.v1.html(pdf_display, height=860, scrolling=False)
 
 # Main content area
