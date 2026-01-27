@@ -9,8 +9,7 @@ python-dotenv>=1.0.0
 
 # PDF processing libraries
 PyPDF2>=3.0.0
-# Keep pdfplumber aligned with a compatible pdfminer-six
-pdfplumber==0.11.5
+# pdfplumber not used in app; removed to avoid pdfminer conflicts
 reportlab>=4.0.0
 Pillow>=10.0.0
 
