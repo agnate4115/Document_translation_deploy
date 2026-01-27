@@ -9,7 +9,6 @@ python-dotenv>=1.0.0
 
 # PDF processing libraries
 PyPDF2>=3.0.0
-# pdfplumber not used in app; removed to avoid pdfminer conflicts
 reportlab>=4.0.0
 Pillow>=10.0.0
 
@@ -26,7 +25,7 @@ onnx>=1.15.0
 onnxruntime>=1.16.0
 opencv-python-headless>=4.8.0
 
-# PDF parsing (must match pdfplumber requirement)
+# PDF parsing
 pdfminer-six==20231228
 
 # Font handling
