@@ -420,7 +420,7 @@ def render_pdf(title: str, pdf_bytes: bytes):
             var viewer = new ej.pdfviewer.PdfViewer({{
               enableToolbar: true, enableNavigation: true, enableTextSelection: true,
               enableAnnotation: true, width: "100%", height: "100%",
-              serviceUrl: "https://ej2services.syncfusion.com/production/web-services/api/pdfviewer"
+              resourceUrl: "https://cdn.syncfusion.com/ej2/26.1.35/dist/ej2-pdfviewer-lib"
             }});
             viewer.appendTo("#" + containerId);
             viewer.load("data:application/pdf;base64," + b64Data, null);
