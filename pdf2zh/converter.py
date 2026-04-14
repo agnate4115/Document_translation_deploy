@@ -325,8 +325,16 @@ class TranslateConverter(PDFConverterEx):
         def worker(s: str):  # 多线程翻译
             if not s.strip() or re.match(r"^\{v\d+\}$", s):  # 空白和公式不翻译
                 return s
+            # Skip strings that are only formula placeholders with whitespace
+            stripped = re.sub(r"\{v\d+\}", "", s).strip()
+            if not stripped:
+                return s
             try:
                 new = self.translator.translate(s)
+                # If translation is empty or whitespace-only, return original
+                if not new or not new.strip():
+                    log.warning(f"Empty translation for: {s[:50]}..., using original")
+                    return s
                 return new
             except BaseException as e:
                 if log.isEnabledFor(logging.DEBUG):
@@ -352,7 +360,11 @@ class TranslateConverter(PDFConverterEx):
         # 根据目标语言获取默认行距
         LANG_LINEHEIGHT_MAP = {
             "zh-cn": 1.4, "zh-tw": 1.4, "zh-hans": 1.4, "zh-hant": 1.4, "zh": 1.4,
-            "ja": 1.1, "ko": 1.2, "en": 1.2, "ar": 1.0, "ru": 0.8, "uk": 0.8, "ta": 0.8
+            "ja": 1.1, "ko": 1.2, "en": 1.2, "ar": 1.0, "ru": 0.8, "uk": 0.8, "ta": 0.8,
+            "hi": 1.3, "bn": 1.3, "mr": 1.3, "gu": 1.3, "te": 1.2, "kn": 1.2, "ml": 1.2,
+            "ur": 1.1, "th": 1.2, "vi": 1.1, "pt": 1.1, "tr": 1.1, "id": 1.1, "ms": 1.1,
+            "pl": 1.1, "nl": 1.1, "sv": 1.1, "cs": 1.1, "ro": 1.1, "el": 1.1,
+            "hu": 1.1, "da": 1.1, "fi": 1.1, "no": 1.1, "fr": 1.1, "de": 1.1, "es": 1.1, "it": 1.1,
         }
         default_line_height = LANG_LINEHEIGHT_MAP.get(self.translator.lang_out.lower(), 1.1) # 小语种默认1.1
         _x, _y = 0, 0
@@ -379,6 +391,16 @@ class TranslateConverter(PDFConverterEx):
             fcur_ = fcur
             ptr = 0
             log.debug(f"< {y} {x} {x0} {x1} {size} {brk} > {sstk[id]} | {new}")
+
+            # Estimate if translated text is longer than original and needs wrapping
+            para_width = x1 - x0
+            allow_wrap = brk  # Original had line breaks
+            if not allow_wrap and para_width > 0:
+                # Estimate translated text width to decide if wrapping is needed
+                text_only = re.sub(r"\{v\d+\}", "", new)
+                estimated_width = len(text_only) * size * 0.5  # rough estimate
+                if estimated_width > para_width * 1.1:
+                    allow_wrap = True  # Force wrapping for longer translations
 
             ops_vals: list[dict] = []
 
@@ -427,7 +449,7 @@ class TranslateConverter(PDFConverterEx):
                             "lidx": lidx
                         })
                         cstk = ""
-                if brk and x + adv > x1 + 0.1 * size:  # 到达右边界且原文段落存在换行
+                if allow_wrap and x + adv > x1 + 0.1 * size:  # 到达右边界，允许换行
                     x = x0
                     lidx += 1
                 if vy_regex:  # 插入公式
@@ -488,14 +510,29 @@ class TranslateConverter(PDFConverterEx):
 
             line_height = default_line_height
 
-            while (lidx + 1) * size * line_height > height and line_height >= 1:
+            # Reduce line height to fit within paragraph bounds, with lower floor
+            while (lidx + 1) * size * line_height > height and line_height >= 0.75:
                 line_height -= 0.05
 
+            # If text STILL overflows vertically, scale font size down
+            font_scale = 1.0
+            if lidx > 0 and (lidx + 1) * size * line_height > height and height > 0:
+                needed_height = (lidx + 1) * size * line_height
+                font_scale = max(height / needed_height, 0.55)
+
             for vals in ops_vals:
+                effective_size = vals["size"] * font_scale
                 if vals["type"] == OpType.TEXT:
-                    ops_list.append(gen_op_txt(vals["font"], vals["size"], vals["x"], vals["dy"] + y - vals["lidx"] * size * line_height, vals["rtxt"]))
+                    # Scale x-position relative to paragraph left edge
+                    effective_x = x0 + (vals["x"] - x0) * font_scale if font_scale < 1.0 else vals["x"]
+                    effective_dy = vals["dy"] * font_scale if font_scale < 1.0 else vals["dy"]
+                    y_pos = y - vals["lidx"] * effective_size * line_height + effective_dy
+                    ops_list.append(gen_op_txt(vals["font"], effective_size, effective_x, y_pos, vals["rtxt"]))
                 elif vals["type"] == OpType.LINE:
-                    ops_list.append(gen_op_line(vals["x"], vals["dy"] + y - vals["lidx"] * size * line_height, vals["xlen"], vals["ylen"], vals["linewidth"]))
+                    effective_x = x0 + (vals["x"] - x0) * font_scale if font_scale < 1.0 else vals["x"]
+                    effective_dy = vals["dy"] * font_scale if font_scale < 1.0 else vals["dy"]
+                    y_pos = y - vals["lidx"] * effective_size * line_height + effective_dy
+                    ops_list.append(gen_op_line(effective_x, y_pos, vals["xlen"] * font_scale, vals["ylen"] * font_scale, vals["linewidth"]))
 
         for l in lstk:  # 排版全局线条
             if l.linewidth < 5:  # hack 有的文档会用粗线条当图片背景

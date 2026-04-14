@@ -133,7 +133,7 @@ def translate_patch(
             # kdtree 是不可能 kdtree 的，不如直接渲染成图片，用空间换时间
             box = np.ones((pix.height, pix.width))
             h, w = box.shape
-            vcls = ["abandon", "figure", "table", "isolate_formula", "formula_caption"]
+            vcls = ["abandon", "figure", "isolate_formula", "formula_caption"]
             for i, d in enumerate(page_layout.boxes):
                 if page_layout.names[int(d.cls)] not in vcls:
                     x0, y0, x1, y1 = d.xyxy.squeeze()
@@ -411,6 +411,11 @@ def download_remote_fonts(lang: str):
             }.items()
             for la in langs
         },
+        # European and other Latin-script languages use GoNoto
+        **{la: "GoNotoKurrent-Regular.ttf" for la in [
+            "pt", "tr", "vi", "id", "ms", "pl", "nl", "sv",
+            "cs", "ro", "hu", "da", "fi", "no", "fr", "de", "es", "it",
+        ]},
     }
     font_name = LANG_NAME_MAP.get(lang, "GoNotoKurrent-Regular.ttf")
 

@@ -52,9 +52,6 @@ class BaseTranslator:
         )
 
     def set_envs(self, envs):
-        # Detach from self.__class__.envs
-        # Cannot use self.envs = copy(self.__class__.envs)
-        # because if set_envs called twice, the second call will override the first call
         self.envs = copy(self.envs)
         if ConfigManager.get_translator_by_name(self.name):
             self.envs = ConfigManager.get_translator_by_name(self.name)
@@ -71,34 +68,58 @@ class BaseTranslator:
             ConfigManager.set_translator_by_name(self.name, self.envs)
 
     def add_cache_impact_parameters(self, k: str, v):
-        """
-        Add parameters that affect the translation quality to distinguish the translation effects under different parameters.
-        :param k: key
-        :param v: value
-        """
         self.cache.add_params(k, v)
 
     def translate(self, text: str, ignore_cache: bool = False) -> str:
-        """
-        Translate the text, and the other part should call this method.
-        :param text: text to translate
-        :return: translated text
-        """
         if not (self.ignore_cache or ignore_cache):
             cache = self.cache.get(text)
             if cache is not None:
                 return cache
 
         translation = self.do_translate(text)
+        translation = self._postprocess(text, translation)
+
         self.cache.set(text, translation)
         return translation
 
+    def _postprocess(self, source: str, translation: str) -> str:
+        """Validate and fix translation output."""
+        if not translation or not source.strip():
+            return translation
+
+        src_markers = re.findall(r"\{v\d+\}", source)
+        if not src_markers:
+            return translation
+
+        src_marker_set = set(src_markers)
+        tgt_marker_set = set(re.findall(r"\{v\d+\}", translation))
+
+        # Retry up to 2 times if markers are missing
+        missing = src_marker_set - tgt_marker_set
+        retries = 0
+        while missing and retries < 2:
+            logger.warning(f"Missing formula markers {missing}, retry {retries + 1}...")
+            translation = self.do_translate(source)
+            tgt_marker_set = set(re.findall(r"\{v\d+\}", translation))
+            missing = src_marker_set - tgt_marker_set
+            retries += 1
+
+        # If markers are STILL missing after retries, append them to preserve layout
+        if missing:
+            logger.warning(f"Could not recover markers {missing} after retries, appending them")
+            for m in sorted(missing):
+                translation += f" {m}"
+
+        # Remove any extra markers that the LLM hallucinated
+        extra = tgt_marker_set - src_marker_set
+        if extra:
+            for m in extra:
+                translation = translation.replace(m, "", 1)
+            translation = re.sub(r"  +", " ", translation).strip()
+
+        return translation
+
     def do_translate(self, text: str) -> str:
-        """
-        Actual translate text, override this method
-        :param text: text to translate
-        :return: translated text
-        """
         raise NotImplementedError
 
     def prompt(
@@ -117,25 +138,45 @@ class BaseTranslator:
                     ),
                 }
             ]
-        except AttributeError:  # `prompt_template` is None
+        except AttributeError:
             pass
         except Exception:
             logging.exception("Error parsing prompt, use the default prompt.")
 
+        # Count formula markers in the source text for explicit instruction
+        markers = re.findall(r"\{v\d+\}", text)
+        marker_instruction = ""
+        if markers:
+            marker_instruction = (
+                f"\n\nIMPORTANT: The source contains {len(markers)} formula placeholder(s): {', '.join(markers)}. "
+                "You MUST include every single one in your translation, exactly as written. "
+                "Do NOT translate, modify, reorder, or omit any of them."
+            )
+
         return [
+            {
+                "role": "system",
+                "content": (
+                    "You are a professional document translation engine. Follow these rules strictly:\n"
+                    "1. Translate EVERY word completely — never skip, summarize, abbreviate, or omit any content.\n"
+                    "2. Preserve ALL formula/variable placeholders exactly: {v0}, {v1}, {v2}, etc. Copy them character-for-character.\n"
+                    "3. Translate ALL table cell content — every cell, header, and label must be translated.\n"
+                    "4. Keep numbers, units, dates, proper nouns, and technical terms accurate.\n"
+                    "5. Maintain the exact same paragraph structure.\n"
+                    "6. Output ONLY the translated text — no explanations, notes, labels, or extra text.\n"
+                    "7. Do NOT add or remove any {v*} placeholders. The count must match exactly.\n"
+                    "8. If a word has no direct translation, transliterate it phonetically.\n"
+                    "9. Do NOT prefix your output with 'Translation:' or 'Translated Text:' — output the translation directly.\n"
+                    "10. Short text (1-3 words) must still be fully translated, not left unchanged.\n"
+                ),
+            },
             {
                 "role": "user",
                 "content": (
-                    "You are a professional, authentic machine translation engine. "
-                    "Only Output the translated text, do not include any other text."
-                    "\n\n"
-                    f"Translate the following markdown source text to {self.lang_out}. "
-                    "Keep the formula notation {v*} unchanged. "
-                    "Output translation directly without any additional text."
-                    "\n\n"
-                    f"Source Text: {text}"
-                    "\n\n"
-                    "Translated Text:"
+                    f"Translate from {self.lang_in} to {self.lang_out}. "
+                    "Translate every word. Output only the translation."
+                    f"{marker_instruction}\n\n"
+                    f"{text}"
                 ),
             },
         ]
@@ -185,7 +226,10 @@ class AzureOpenAITranslator(BaseTranslator):
         if api_key is None:
             api_key = self.envs["AZURE_OPENAI_API_KEY"]
         super().__init__(lang_in, lang_out, model, ignore_cache)
-        self.options = {"temperature": 0}  # Random sampling may break formula markers
+        self.options = {
+            "temperature": 0,       # Deterministic output to preserve formula markers
+            "max_tokens": 4096,     # Prevent truncation of longer paragraphs
+        }
         self.client = openai.AzureOpenAI(
             azure_endpoint=base_url,
             azure_deployment=model,
@@ -193,6 +237,7 @@ class AzureOpenAITranslator(BaseTranslator):
             api_key=api_key,
         )
         self.prompttext = prompt
+        self._last_source = ""  # Track source text for postprocessing
         self.add_cache_impact_parameters("temperature", self.options["temperature"])
         self.add_cache_impact_parameters("prompt", self.prompt("", self.prompttext))
         
@@ -202,15 +247,16 @@ class AzureOpenAITranslator(BaseTranslator):
         self.think_filter_regex = re.compile(think_filter_regex, flags=re.DOTALL)
 
     @retry(
-        retry=retry_if_exception_type(openai.RateLimitError),
+        retry=retry_if_exception_type((openai.RateLimitError, openai.APITimeoutError, openai.APIConnectionError)),
         stop=stop_after_attempt(100),
         wait=wait_exponential(multiplier=1, min=1, max=15),
         before_sleep=lambda retry_state: logger.warning(
-            f"RateLimitError, retrying in {retry_state.next_action.sleep} seconds... "
+            f"API error, retrying in {retry_state.next_action.sleep} seconds... "
             f"(Attempt {retry_state.attempt_number}/100)"
         ),
     )
     def do_translate(self, text) -> str:
+        self._last_source = text
         response = self.client.chat.completions.create(
             model=self.model,
             **self.options,
@@ -219,8 +265,26 @@ class AzureOpenAITranslator(BaseTranslator):
         if not response.choices:
             if hasattr(response, "error"):
                 raise ValueError("Error response from Service", response.error)
-        content = response.choices[0].message.content.strip()
+            raise ValueError("Empty response from translation service")
+        content = response.choices[0].message.content
+        if not content:
+            raise ValueError("Empty content in translation response")
+        content = content.strip()
         content = self.think_filter_regex.sub("", content).strip()
+        # Remove common LLM artifacts - prefixes the model sometimes adds
+        for prefix in [
+            "Translated Text:", "Translation:", "Translated text:",
+            "Here is the translation:", "Here's the translation:",
+            "Output:", "Result:",
+        ]:
+            if content.startswith(prefix):
+                content = content[len(prefix):].strip()
+        # Remove wrapping quotes the model sometimes adds
+        if len(content) > 2 and content[0] == '"' and content[-1] == '"':
+            inner = content[1:-1]
+            # Only strip if the source didn't have quotes
+            if not (self._last_source and self._last_source.startswith('"')):
+                content = inner
         return content
 
     def get_formular_placeholder(self, id: int):
