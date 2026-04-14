@@ -389,66 +389,67 @@ def render_pdf(title: str, pdf_bytes: bytes):
 
     b64 = base64.b64encode(pdf_bytes).decode("utf-8")
     container_id = f"pdf-container-{uuid.uuid4().hex}"
+    syncfusion_key = os.getenv("SYNCFUSION_LICENSE_KEY", "")
 
     pdf_display = f"""
     <div style="border: 1px solid rgba(49, 51, 63, 0.15); border-radius: 10px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.06);">
       <div style="padding: 10px 14px; background: linear-gradient(135deg, #1e3a5f 0%, #2d5f8a 100%); font-weight: 600; color: white; font-size: 0.9rem;">{title}</div>
-      <div id="{container_id}" style="width: 100%; height: 820px; overflow: auto; background: #525659;"></div>
+      <div id="{container_id}" style="width: 100%; height: 820px;"></div>
     </div>
     <script type="text/javascript">
       (function() {{
         var b64Data = "{b64}";
+        var licenseKey = "{syncfusion_key}";
         var containerId = "{container_id}";
 
-        function renderAllPages(pdf) {{
-          var container = document.getElementById(containerId);
-          container.innerHTML = "";
-          for (var i = 1; i <= pdf.numPages; i++) {{
-            (function(pageNum) {{
-              pdf.getPage(pageNum).then(function(page) {{
-                var scale = 1.5;
-                var viewport = page.getViewport({{ scale: scale }});
-                var wrapper = document.createElement("div");
-                wrapper.style.cssText = "display:flex;justify-content:center;margin:10px 0;";
-                var canvas = document.createElement("canvas");
-                canvas.width = viewport.width;
-                canvas.height = viewport.height;
-                canvas.style.cssText = "max-width:100%;height:auto;box-shadow:0 2px 8px rgba(0,0,0,0.3);";
-                wrapper.appendChild(canvas);
-                container.appendChild(wrapper);
-                page.render({{ canvasContext: canvas.getContext("2d"), viewport: viewport }});
-              }});
-            }})(i);
+        function initPdfViewer() {{
+          if (!window.ej || !ej.pdfviewer || !ej.pdfviewer.PdfViewer) {{
+            var c = document.getElementById(containerId);
+            if (c) {{
+              c.innerHTML = "<div style='padding: 12px; color: #e63946;'>Failed to load PDF viewer.</div>";
+            }}
+            return;
+          }}
+          try {{
+            if (licenseKey) {{ ej.base.registerLicense(licenseKey); }}
+            ej.pdfviewer.PdfViewer.Inject(
+              ej.pdfviewer.Toolbar, ej.pdfviewer.Magnification, ej.pdfviewer.Navigation,
+              ej.pdfviewer.Print, ej.pdfviewer.TextSelection, ej.pdfviewer.TextSearch,
+              ej.pdfviewer.Annotation, ej.pdfviewer.FormFields, ej.pdfviewer.FormDesigner
+            );
+            var viewer = new ej.pdfviewer.PdfViewer({{
+              enableToolbar: true, enableNavigation: true, enableTextSelection: true,
+              enableAnnotation: true, width: "100%", height: "100%",
+              resourceUrl: "https://cdn.syncfusion.com/ej2/26.1.35/dist/ej2-pdfviewer-lib"
+            }});
+            viewer.appendTo("#" + containerId);
+            viewer.load("data:application/pdf;base64," + b64Data, null);
+          }} catch (e) {{
+            var c = document.getElementById(containerId);
+            if (c) {{ c.innerHTML = "<div style='padding: 12px; color: #e63946;'>Unable to preview PDF. Use the download button.</div>"; }}
           }}
         }}
 
-        function initViewer() {{
-          var raw = atob(b64Data);
-          var arr = new Uint8Array(raw.length);
-          for (var i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
-          var loadingTask = pdfjsLib.getDocument({{ data: arr }});
-          loadingTask.promise.then(renderAllPages).catch(function(err) {{
-            var c = document.getElementById(containerId);
-            if (c) c.innerHTML = "<div style='padding:12px;color:#e63946;'>Failed to render PDF: " + err.message + "</div>";
-          }});
-        }}
-
-        function loadPdfJs(callback) {{
-          if (window.pdfjsLib) {{ callback(); return; }}
+        function loadSyncfusionResources(callback) {{
+          var link = document.createElement("link");
+          link.rel = "stylesheet";
+          link.href = "https://cdn.syncfusion.com/ej2/26.1.35/material.css";
+          document.head.appendChild(link);
           var script = document.createElement("script");
-          script.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
-          script.onload = function() {{
-            pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
-            callback();
-          }};
+          script.src = "https://cdn.syncfusion.com/ej2/26.1.35/dist/ej2.min.js";
+          script.onload = callback;
           script.onerror = function() {{
             var c = document.getElementById(containerId);
-            if (c) c.innerHTML = "<div style='padding:12px;color:#e63946;'>Failed to load PDF.js from CDN.</div>";
+            if (c) {{ c.innerHTML = "<div style='padding: 12px; color: #e63946;'>Failed to load viewer scripts from CDN.</div>"; }}
           }};
           document.head.appendChild(script);
         }}
 
-        loadPdfJs(initViewer);
+        if (!window.ej || !ej.pdfviewer || !ej.pdfviewer.PdfViewer) {{
+          loadSyncfusionResources(initPdfViewer);
+        }} else {{
+          initPdfViewer();
+        }}
       }})();
     </script>
     """
