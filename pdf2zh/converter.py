@@ -258,9 +258,20 @@ class TranslateConverter(PDFConverterEx):
                 # 当前字符不属于公式或当前字符是公式的第一个字符
                 if not vstk:
                     if cls == xt_cls:               # 当前字符与前一个字符属于同一段落
-                        if child.x0 > xt.x1 + 1:    # 添加行内空格
+                        cur_size = max(pstk[-1].size, child.size)
+                        y_same_line = abs(child.y0 - xt.y0) < cur_size * 0.5
+                        x_gap = child.x0 - xt.x1
+                        if y_same_line and x_gap > cur_size * 1.5:
+                            # Large horizontal gap on the same line → table cell boundary
+                            sstk.append("")
+                            pstk.append(Paragraph(child.y0, child.x0, child.x0, child.x0, child.y0, child.y1, child.size, False))
+                        elif child.x0 > xt.x1 + max(1, pstk[-1].size * 0.15):    # 添加行内空格
                             sstk[-1] += " "
                         elif child.x1 < xt.x0:      # 添加换行空格并标记原文段落存在换行
+                            sstk[-1] += " "
+                            pstk[-1].brk = True
+                        elif not y_same_line and child.x0 < pstk[-1].x0 + cur_size:
+                            # Y-position changed significantly and x wrapped back → line break
                             sstk[-1] += " "
                             pstk[-1].brk = True
                     else:                           # 根据当前字符构建一个新的段落
@@ -392,16 +403,6 @@ class TranslateConverter(PDFConverterEx):
             ptr = 0
             log.debug(f"< {y} {x} {x0} {x1} {size} {brk} > {sstk[id]} | {new}")
 
-            # Estimate if translated text is longer than original and needs wrapping
-            para_width = x1 - x0
-            allow_wrap = brk  # Original had line breaks
-            if not allow_wrap and para_width > 0:
-                # Estimate translated text width to decide if wrapping is needed
-                text_only = re.sub(r"\{v\d+\}", "", new)
-                estimated_width = len(text_only) * size * 0.5  # rough estimate
-                if estimated_width > para_width * 1.1:
-                    allow_wrap = True  # Force wrapping for longer translations
-
             ops_vals: list[dict] = []
 
             while ptr < len(new):
@@ -449,7 +450,7 @@ class TranslateConverter(PDFConverterEx):
                             "lidx": lidx
                         })
                         cstk = ""
-                if allow_wrap and x + adv > x1 + 0.1 * size:  # 到达右边界，允许换行
+                if x + adv > x1 + 0.1 * size:  # 到达右边界，换行
                     x = x0
                     lidx += 1
                 if vy_regex:  # 插入公式
@@ -510,15 +511,22 @@ class TranslateConverter(PDFConverterEx):
 
             line_height = default_line_height
 
-            # Reduce line height to fit within paragraph bounds, with lower floor
-            while (lidx + 1) * size * line_height > height and line_height >= 0.75:
+            # For paragraphs that wrapped, allow using extra vertical space
+            # (original single-line text may have had padding below it)
+            effective_height = height
+            if lidx > 0 and not brk and height > 0:
+                # Give 50% extra vertical room for text that didn't originally wrap
+                effective_height = height * 1.5
+
+            # Reduce line height to fit within paragraph bounds
+            while (lidx + 1) * size * line_height > effective_height and line_height >= 0.65:
                 line_height -= 0.05
 
             # If text STILL overflows vertically, scale font size down
             font_scale = 1.0
-            if lidx > 0 and (lidx + 1) * size * line_height > height and height > 0:
+            if lidx > 0 and (lidx + 1) * size * line_height > effective_height and effective_height > 0:
                 needed_height = (lidx + 1) * size * line_height
-                font_scale = max(height / needed_height, 0.55)
+                font_scale = max(effective_height / needed_height, 0.5)
 
             for vals in ops_vals:
                 effective_size = vals["size"] * font_scale
